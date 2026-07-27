@@ -25,6 +25,14 @@ const orderSchema = new mongoose.Schema({
     address: String,
     district: String,
     thana: String
+  },
+  billingAddress: {
+    fullName: String,
+    phone: String,
+    email: String,
+    address: String,
+    district: String,
+    thana: String
   }
 }, { timestamps: true });
 

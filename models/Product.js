@@ -11,6 +11,8 @@ const productSchema = new mongoose.Schema({
   discount: { type: String },
   image: { type: String },
   images: [{ type: String }],
+  brand: { type: String },
+  brandImage: { type: String },
   stock: { type: Number, default: 0 },
   status: { type: String, default: 'Active' },
   isTopSale: { type: Boolean, default: false },

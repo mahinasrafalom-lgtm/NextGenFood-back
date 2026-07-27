@@ -42,7 +42,7 @@ const verifyToken = async (req, res, next) => {
            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
            const jsonPayload = Buffer.from(base64, 'base64').toString('utf8');
            const decodedToken = JSON.parse(jsonPayload);
-           req.user = { uid: decodedToken.user_id || decodedToken.sub };
+           req.user = { uid: decodedToken.user_id || decodedToken.sub || decodedToken.email, email: decodedToken.email, role: decodedToken.role };
          } else {
            throw new Error("Invalid JWT format (possibly a stale dummy token)");
          }
