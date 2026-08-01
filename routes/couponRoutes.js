@@ -3,6 +3,7 @@ const router = express.Router();
 const Coupon = require('../models/Coupon');
 const { verifyToken } = require('../middleware/auth');
 const User = require('../models/User');
+const Order = require('../models/Order');
 
 // @route   GET /api/coupons
 // @desc    Get available coupons
@@ -15,9 +16,24 @@ router.get('/', verifyToken, async (req, res) => {
     // Fetch active coupons
     const coupons = await Coupon.find({ isActive: true });
     
+    // Check how many orders this user has placed to determine eligibility
+    const orderCount = await Order.countDocuments({ email: user.email });
+    
+    // Filter coupons based on target audience rules
+    const eligibleCoupons = coupons.filter(c => {
+      if (c.targetAudience === 'new_user') {
+        return orderCount === 0;
+      }
+      if (c.targetAudience === 'loyal_customer') {
+        return orderCount >= (c.minPurchasesRequired || 0);
+      }
+      // 'all' or undefined
+      return true;
+    });
+    
     // Determine which ones are available vs applied(used) by this user
-    const available = coupons.filter(c => !c.usedBy.includes(user.email));
-    const applied = coupons.filter(c => c.usedBy.includes(user.email));
+    const available = eligibleCoupons.filter(c => !c.usedBy.includes(user.email));
+    const applied = eligibleCoupons.filter(c => c.usedBy.includes(user.email));
 
     res.json({ available, applied });
   } catch (error) {
@@ -44,9 +60,9 @@ router.get('/all', async (req, res) => {
 // @access  Private/Admin
 router.post('/', verifyToken, async (req, res) => {
   try {
-    const { code, title, description, discountPercentage, discountAmount, validUntil, isActive } = req.body;
+    const { code, title, description, discountPercentage, discountAmount, validUntil, isActive, targetAudience, minPurchasesRequired } = req.body;
     const newCoupon = new Coupon({
-      code, title, description, discountPercentage, discountAmount, validUntil, isActive
+      code, title, description, discountPercentage, discountAmount, validUntil, isActive, targetAudience, minPurchasesRequired
     });
     await newCoupon.save();
     res.status(201).json(newCoupon);

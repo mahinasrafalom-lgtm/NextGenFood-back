@@ -1,11 +1,13 @@
 const mongoose = require('mongoose');
 
 const userSchema = new mongoose.Schema({
-  firebaseUid: { type: String, required: true, unique: true },
+  firebaseUid: { type: String, unique: true, sparse: true },
   email: { type: String, required: true, unique: true },
   name: { type: String },
   phone: { type: String },
   photoURL: { type: String },
+  password: { type: String }, // Hashed password for staff login
+  otpSecret: { type: String }, // TOTP secret for 2FA
   address: { type: String }, // Keep for backward compatibility or primary simple address
   addresses: [{
     type: { type: String, enum: ['Home', 'Work', 'Office', 'Other'], default: 'Home' },

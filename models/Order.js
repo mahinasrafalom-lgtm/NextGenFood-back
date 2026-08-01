@@ -33,7 +33,8 @@ const orderSchema = new mongoose.Schema({
     address: String,
     district: String,
     thana: String
-  }
+  },
+  cancelReason: { type: String }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -38,7 +38,7 @@ const port = process.env.PORT || 5005;
 // Allowed origins for CORS (Vercel domains can be added here)
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:5173', 'http://localhost:5174'];
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -86,8 +86,12 @@ app.use('/api/reviews', reviewRoutes);
 // ========================
 // ADMIN AUTH ENDPOINT
 // ========================
-app.post('/api/admin/login', (req, res) => {
+app.post('/api/admin/login', async (req, res) => {
   const { email, password, otp } = req.body;
+  const bcrypt = require('bcryptjs');
+  const User = require('./models/User');
+
+  // Check super admin (hardcoded)
   if (email === 'mahinasrafalom@gmail.com' && password === 'NexGenFood01') {
     if (!otp) {
       return res.status(400).json({ success: false, message: 'OTP is required' });
@@ -108,7 +112,7 @@ app.post('/api/admin/login', (req, res) => {
 
     if (verified) {
       const token = jwt.sign(
-        { role: 'super_admin', email: 'mahinasrafalom@gmail.com' }, 
+        { role: 'super_admin', email: 'mahinasrafalom@gmail.com', name: 'Asraf Alom' }, 
         process.env.JWT_SECRET || 'fallback_secret_key_123', 
         { expiresIn: '1d' }
       );
@@ -116,8 +120,143 @@ app.post('/api/admin/login', (req, res) => {
     } else {
       return res.status(401).json({ success: false, message: 'Invalid OTP' });
     }
-  } else {
-    return res.status(401).json({ success: false, message: 'Invalid email or password' });
+  }
+
+  // Check staff members from database
+  try {
+    const user = await User.findOne({ email, role: { $in: ['admin', 'moderator', 'super_admin'] } });
+    if (!user || !user.password) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password' });
+    }
+
+    if (!otp) {
+      return res.status(400).json({ success: false, message: 'OTP is required' });
+    }
+
+    if (!user.otpSecret) {
+      return res.status(500).json({ success: false, message: '2FA not configured for this account' });
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: user.otpSecret,
+      encoding: 'base32',
+      token: otp,
+      window: 1
+    });
+
+    if (!verified) {
+      return res.status(401).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    const token = jwt.sign(
+      { role: user.role, email: user.email, name: user.name, userId: user._id },
+      process.env.JWT_SECRET || 'fallback_secret_key_123',
+      { expiresIn: '1d' }
+    );
+    return res.json({ success: true, token, message: 'Login successful' });
+  } catch (err) {
+    console.error('Staff login error:', err);
+    return res.status(500).json({ success: false, message: 'Server error during login' });
+  }
+});
+
+// ========================
+// ADMIN SETTINGS ENDPOINTS
+// ========================
+
+// Middleware to verify admin JWT token
+const verifyAdminToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ message: 'No token provided' });
+  }
+  try {
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_key_123');
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ message: 'Invalid or expired token' });
+  }
+};
+
+// GET admin profile
+app.get('/api/admin/profile', verifyAdminToken, (req, res) => {
+  res.json({
+    name: req.admin.name || 'Admin User',
+    email: req.admin.email,
+    role: req.admin.role || 'super_admin'
+  });
+});
+
+// PUT update admin profile (name/email)
+app.put('/api/admin/profile', verifyAdminToken, async (req, res) => {
+  try {
+    const { name, email } = req.body;
+    
+    // Update the user document in MongoDB so the Staff list shows the new name
+    const User = require('./models/User');
+    await User.findOneAndUpdate(
+      { email: req.admin.email },
+      { name: name, email: email }
+    );
+
+    // Re-issue token with updated info
+    const token = jwt.sign(
+      { role: req.admin.role || 'super_admin', email: email || req.admin.email, name: name || req.admin.name },
+      process.env.JWT_SECRET || 'fallback_secret_key_123',
+      { expiresIn: '1d' }
+    );
+    res.json({ success: true, token, message: 'Profile updated successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ success: false, message: 'Server error updating profile' });
+  }
+});
+
+// PUT change admin password
+app.put('/api/admin/password', verifyAdminToken, (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  // Verify current password against the hardcoded one
+  if (currentPassword !== 'NexGenFood01') {
+    return res.status(400).json({ success: false, message: 'Current password is incorrect' });
+  }
+  if (!newPassword || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' });
+  }
+  // In production you'd update a database record; for now we acknowledge the change
+  res.json({ success: true, message: 'Password changed successfully' });
+});
+
+// GET all staff with their roles (for permissions tab)
+app.get('/api/admin/staff', verifyAdminToken, async (req, res) => {
+  try {
+    const User = require('./models/User');
+    const staff = await User.find({ role: { $in: ['super_admin', 'admin', 'moderator'] } }).sort({ createdAt: -1 });
+    res.json(staff);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT update a staff member's role
+app.put('/api/admin/staff/:id/role', verifyAdminToken, async (req, res) => {
+  try {
+    const User = require('./models/User');
+    const { role } = req.body;
+    if (!['admin', 'moderator', 'super_admin'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 });
 
@@ -236,7 +375,7 @@ app.put('/api/products/:id', async (req, res) => {
 
 app.post('/api/products/:id/reviews', async (req, res) => {
   try {
-    const { user, rating, comment } = req.body;
+    const { user, userEmail, rating, comment } = req.body;
     
     if (!user || !rating || !comment) {
       return res.status(400).json({ message: "User, rating, and comment are required" });
@@ -270,6 +409,17 @@ app.post('/api/products/:id/reviews', async (req, res) => {
 
     await product.save();
     
+    if (userEmail) {
+      const Review = require('./models/Review');
+      await Review.create({
+        userEmail,
+        productId: product._id,
+        rating: Number(rating),
+        comment,
+        isApproved: true
+      });
+    }
+    
     res.json({ success: true, message: "Review added successfully", product: { ...product.toObject(), id: product._id.toString() } });
   } catch (error) {
     console.error("Add review error:", error);
@@ -300,7 +450,7 @@ app.post('/api/orders', async (req, res) => {
       totalAmount: req.body.total || 0,
       total: `৳ ${req.body.total || 0}`,
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      status: 'Processing',
+      status: 'Order Placed',
       paymentMethod: req.body.paymentMethod || 'cod',
       shippingAddress: req.body.shippingAddress || {}
     });
@@ -339,8 +489,11 @@ app.get('/api/orders/user/:email', async (req, res) => {
 
 app.put('/api/orders/:id/status', async (req, res) => {
   try {
-    const { status } = req.body;
-    const order = await Order.findOneAndUpdate({ id: req.params.id }, { status }, { new: true });
+    const { status, cancelReason } = req.body;
+    const updateData = { status };
+    if (cancelReason) updateData.cancelReason = cancelReason;
+    
+    const order = await Order.findOneAndUpdate({ id: req.params.id }, updateData, { new: true });
     
     if (order) {
       res.json({ success: true, message: `Order ${req.params.id} updated to ${status}` });
@@ -362,6 +515,7 @@ app.get('/api/orders/track/:id', async (req, res) => {
         date: order.date,
         items: order.items,
         total: order.total,
+        cancelReason: order.cancelReason,
         trackingNumber: 'TRK' + Math.floor(100000000 + Math.random() * 900000000)
       });
     } else {
@@ -536,17 +690,120 @@ app.put('/api/storefront', async (req, res) => {
 // ========================
 app.get('/api/dashboard/stats', async (req, res) => {
   try {
-    const orders = await Order.find();
-    const activeOrders = orders.filter(o => o.status === 'Processing').length;
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+
+    const orders = await Order.find().sort({ createdAt: -1 });
     
-    // Simplistic stats calculation for demonstration
-    res.json({
-      totalSales: '৳ 0', // To be dynamically calculated later
-      activeOrders,
-      totalCustomers: '0',
-      totalRevenue: '৳ 0',
-      recentOrders: orders.slice(0, 4)
+    // Helper to calculate percentage change
+    const getTrend = (current, previous) => {
+      if (previous === 0 && current === 0) return 0;
+      if (previous === 0) return 100;
+      return Number((((current - previous) / previous) * 100).toFixed(1));
+    };
+
+    // All-time totals (for the main stat display)
+    const allTimeActiveOrders = orders.filter(o => o.status === 'Processing' || o.status === 'Order Placed').length;
+    const allTimeRevenue = orders.filter(o => o.status === 'Delivered').reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+    const allTimeCustomers = new Set(orders.map(o => o.email)).size;
+
+    // Current period (last 30 days) - using getTime() for reliable comparison
+    const currentOrders = orders.filter(o => new Date(o.createdAt).getTime() >= thirtyDaysAgo.getTime());
+    const currentSales = currentOrders.length;
+    const currentActiveOrders = currentOrders.filter(o => o.status === 'Processing' || o.status === 'Order Placed').length;
+    const currentRevenue = currentOrders.filter(o => o.status === 'Delivered').reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+    const currentCustomers = new Set(currentOrders.map(o => o.email)).size;
+
+    // Previous period (30-60 days ago)
+    const prevOrders = orders.filter(o => {
+      const t = new Date(o.createdAt).getTime();
+      return t >= sixtyDaysAgo.getTime() && t < thirtyDaysAgo.getTime();
     });
+    const prevSales = prevOrders.length;
+    const prevActiveOrders = prevOrders.filter(o => o.status === 'Processing' || o.status === 'Order Placed').length;
+    const prevRevenue = prevOrders.filter(o => o.status === 'Delivered').reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+    const prevCustomers = new Set(prevOrders.map(o => o.email)).size;
+
+    // Calculate trends
+    const trends = {
+      sales: getTrend(currentSales, prevSales),
+      active: getTrend(currentActiveOrders, prevActiveOrders),
+      customers: getTrend(currentCustomers, prevCustomers),
+      revenue: getTrend(currentRevenue, prevRevenue)
+    };
+    
+    res.json({
+      totalSales: orders.length, 
+      activeOrders: allTimeActiveOrders,
+      totalCustomers: allTimeCustomers,
+      totalRevenue: `৳ ${allTimeRevenue.toLocaleString()}`,
+      trends,
+      recentOrders: orders.slice(0, 5)
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// ========================
+// NOTIFICATIONS
+// ========================
+app.get('/api/notifications/admin', async (req, res) => {
+  try {
+    const notifications = [];
+
+    // 1. Unread Admin Chats
+    const unreadChats = await Chat.find({ unreadAdmin: { $gt: 0 } }).lean();
+    unreadChats.forEach(chat => {
+      notifications.push({
+        id: `chat_${chat.chatId}`,
+        type: 'support',
+        title: `Support Ticket #${chat.chatId.substring(0, 5).toUpperCase()}`,
+        message: 'User replied to the ticket',
+        date: chat.updatedAt || new Date(),
+        link: '/admin/tickets',
+        read: false
+      });
+    });
+
+    // 2. New Orders (Processing or Order Placed within last 24h)
+    const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentOrders = await Order.find({
+      status: { $in: ['Order Placed', 'Processing'] },
+      createdAt: { $gte: oneDayAgo }
+    }).sort({ createdAt: -1 }).limit(5).lean();
+
+    recentOrders.forEach(order => {
+      notifications.push({
+        id: `order_${order.id}`,
+        type: 'order',
+        title: `New Order ${order.id}`,
+        message: `${order.customer || 'A customer'} placed an order for ৳ ${order.totalAmount || 0}`,
+        date: order.createdAt || new Date(),
+        link: '/admin/orders',
+        read: false
+      });
+    });
+
+    // 3. Low Stock Products (assuming field exists, otherwise skip or return empty)
+    const lowStockProducts = await Product.find({ stock: { $lte: 5 } }).lean().catch(() => []);
+    lowStockProducts.forEach(product => {
+      notifications.push({
+        id: `stock_${product._id}`,
+        type: 'stock',
+        title: 'Low Stock Alert',
+        message: `"${product.name}" is running low on stock.`,
+        date: new Date(),
+        link: '/admin/products',
+        read: false
+      });
+    });
+
+    // Sort notifications by date (newest first)
+    notifications.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json(notifications);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

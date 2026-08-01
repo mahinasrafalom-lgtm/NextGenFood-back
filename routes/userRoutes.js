@@ -31,7 +31,8 @@ router.post('/profile', verifyToken, async (req, res) => {
     let user = await User.findOne({ firebaseUid: req.user.uid });
     
     if (user) {
-      return res.status(400).json({ message: 'User profile already exists' });
+      // Return 200 OK so that Google Login doesn't fail for returning users
+      return res.status(200).json(user);
     }
     
     user = new User({
@@ -252,35 +253,70 @@ router.get('/', async (req, res) => {
 router.post('/admin-create', async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
-    const admin = require('firebase-admin');
-    
-    let firebaseUser;
-    
-    try {
-      // 1. Create user in Firebase Auth
-      firebaseUser = await admin.auth().createUser({
-        email,
-        password,
-        displayName: name,
-      });
-      
-      // Optionally set custom claims for role
-      await admin.auth().setCustomUserClaims(firebaseUser.uid, { role });
-    } catch (firebaseErr) {
-      console.error('Firebase Admin Error:', firebaseErr);
-      return res.status(400).json({ message: 'Failed to create user in Firebase. Make sure Firebase Admin SDK is configured with service account credentials.' });
+    const bcrypt = require('bcryptjs');
+    const speakeasy = require('speakeasy');
+    const QRCode = require('qrcode');
+
+    // Validate
+    if (!email || !password || !name) {
+      return res.status(400).json({ message: 'Name, email and password are required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    }
+    if (!['admin', 'moderator', 'super_admin'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
     }
 
-    // 2. Save user to MongoDB
-    const newUser = new User({
-      firebaseUid: firebaseUser.uid,
-      email,
-      name,
-      role
+    // Check if user already exists as staff
+    const existing = await User.findOne({ email });
+    if (existing && ['admin', 'moderator', 'super_admin'].includes(existing.role)) {
+      return res.status(400).json({ message: 'A staff member with this email already exists.' });
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    // Generate OTP secret for 2FA
+    const secret = speakeasy.generateSecret({
+      name: `NextPetFood (${email})`,
+      issuer: 'NextPetFood Admin'
     });
 
-    await newUser.save();
-    res.status(201).json(newUser);
+    let newUser;
+
+    if (existing) {
+      // Promote existing customer to staff
+      existing.name = name;
+      existing.password = hashedPassword;
+      existing.otpSecret = secret.base32;
+      existing.role = role;
+      existing.status = 'active';
+      await existing.save();
+      newUser = existing;
+    } else {
+      // Create brand new user
+      newUser = new User({
+        email,
+        name,
+        password: hashedPassword,
+        otpSecret: secret.base32,
+        role,
+        status: 'active'
+      });
+      await newUser.save();
+    }
+
+    // Generate QR code data URL
+    const qrDataUrl = await QRCode.toDataURL(secret.otpauth_url);
+
+    res.status(201).json({
+      user: newUser,
+      otpSecret: secret.base32,
+      otpQrCode: qrDataUrl,
+      message: 'Staff member created. Share the QR code or secret key with them to set up their authenticator app.'
+    });
   } catch (error) {
     console.error(error);
     if (error.code === 11000) {
