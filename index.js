@@ -537,6 +537,8 @@ app.get('/api/orders/track/:id', async (req, res) => {
         items: order.items,
         total: order.total,
         cancelReason: order.cancelReason,
+        paymentMethod: order.paymentMethod,
+        paymentStatus: order.paymentStatus,
         trackingNumber: 'TRK' + Math.floor(100000000 + Math.random() * 900000000)
       });
     } else {
