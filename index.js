@@ -778,11 +778,32 @@ app.get('/api/notifications/admin', async (req, res) => {
     const unreadChats = await Chat.find({ unreadAdmin: { $gt: 0 } }).lean();
     unreadChats.forEach(chat => {
       notifications.push({
-        id: `chat_${chat.chatId}`,
-        type: 'support',
-        title: `Support Ticket #${chat.chatId.substring(0, 5).toUpperCase()}`,
-        message: 'User replied to the ticket',
+        id: `chat_${chat._id}`,
+        type: 'chat',
+        refId: chat._id.toString(),
+        title: `New Message from ${chat.user?.fullName || 'Customer'}`,
+        message: 'You have unread chat messages',
         date: chat.updatedAt || new Date(),
+        link: '/admin/messages',
+        read: false
+      });
+    });
+
+    // 1b. Recent Support Tickets (open or recently updated within last 24h)
+    const Ticket = require('./models/Ticket');
+    const ticketWindow = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const recentTickets = await Ticket.find({
+      status: { $ne: 'Closed' },
+      updatedAt: { $gte: ticketWindow }
+    }).sort({ updatedAt: -1 }).limit(5).lean();
+    recentTickets.forEach(ticket => {
+      notifications.push({
+        id: `ticket_${ticket._id}`,
+        type: 'support',
+        refId: ticket._id.toString(),
+        title: `Support Ticket #${ticket._id.toString().slice(-6).toUpperCase()}`,
+        message: ticket.title || 'New support request',
+        date: ticket.updatedAt || ticket.createdAt || new Date(),
         link: '/admin/tickets',
         read: false
       });
@@ -799,6 +820,7 @@ app.get('/api/notifications/admin', async (req, res) => {
       notifications.push({
         id: `order_${order.id}`,
         type: 'order',
+        refId: order.id,
         title: `New Order ${order.id}`,
         message: `${order.customer || 'A customer'} placed an order for ৳ ${order.totalAmount || 0}`,
         date: order.createdAt || new Date(),
@@ -813,6 +835,7 @@ app.get('/api/notifications/admin', async (req, res) => {
       notifications.push({
         id: `stock_${product._id}`,
         type: 'stock',
+        refId: product._id.toString(),
         title: 'Low Stock Alert',
         message: `"${product.name}" is running low on stock.`,
         date: new Date(),
