@@ -239,7 +239,7 @@ router.get('/', async (req, res) => {
       query = { role: { $in: ['super_admin', 'admin', 'moderator'] } };
     }
 
-    const users = await User.find(query).sort({ createdAt: -1 });
+    const users = await User.find(query).select('-password -otpSecret').sort({ createdAt: -1 });
     res.json(users);
   } catch (error) {
     console.error(error);
