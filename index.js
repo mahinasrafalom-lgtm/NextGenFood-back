@@ -489,14 +489,35 @@ app.get('/api/orders/user/:email', async (req, res) => {
 
 app.put('/api/orders/:id/status', async (req, res) => {
   try {
-    const { status, cancelReason } = req.body;
-    const updateData = { status };
+    const { status, cancelReason, paymentStatus } = req.body;
+    const updateData = {};
+    if (status) updateData.status = status;
     if (cancelReason) updateData.cancelReason = cancelReason;
+    if (paymentStatus) updateData.paymentStatus = paymentStatus;
     
     const order = await Order.findOneAndUpdate({ id: req.params.id }, updateData, { new: true });
     
     if (order) {
       res.json({ success: true, message: `Order ${req.params.id} updated to ${status}` });
+    } else {
+      res.status(404).json({ success: false, message: 'Order not found' });
+    }
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+app.put('/api/orders/:id/payment', async (req, res) => {
+  try {
+    const { transactionId, paymentScreenshot } = req.body;
+    const updateData = { paymentStatus: 'Pending Verification' };
+    if (transactionId) updateData.transactionId = transactionId;
+    if (paymentScreenshot) updateData.paymentScreenshot = paymentScreenshot;
+    
+    const order = await Order.findOneAndUpdate({ id: req.params.id }, updateData, { new: true });
+    
+    if (order) {
+      res.json({ success: true, message: `Payment details updated for order ${req.params.id}` });
     } else {
       res.status(404).json({ success: false, message: 'Order not found' });
     }
