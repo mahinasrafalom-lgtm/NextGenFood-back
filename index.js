@@ -40,6 +40,28 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',') 
   : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'];
 
+const http = require('http');
+const { Server } = require('socket.io');
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE"]
+  }
+});
+
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -452,9 +474,14 @@ app.post('/api/orders', async (req, res) => {
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       status: 'Order Placed',
       paymentMethod: req.body.paymentMethod || 'cod',
-      shippingAddress: req.body.shippingAddress || {}
+      shippingAddress: req.body.shippingAddress || {},
+      rewardItem: req.body.rewardItem || null
     });
     await newOrder.save();
+    
+    // Emit event to admin dashboard
+    req.io.emit('new_order', { orderId: newOrder.id });
+    
     res.json({ success: true, orderId, message: "Order placed successfully!" });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -498,6 +525,8 @@ app.put('/api/orders/:id/status', async (req, res) => {
     const order = await Order.findOneAndUpdate({ id: req.params.id }, updateData, { new: true });
     
     if (order) {
+      // Emit event to notify users and admins
+      req.io.emit('order_updated', { orderId: order.id, status: order.status, paymentStatus: order.paymentStatus });
       res.json({ success: true, message: `Order ${req.params.id} updated to ${status}` });
     } else {
       res.status(404).json({ success: false, message: 'Order not found' });
@@ -517,6 +546,7 @@ app.put('/api/orders/:id/payment', async (req, res) => {
     const order = await Order.findOneAndUpdate({ id: req.params.id }, updateData, { new: true });
     
     if (order) {
+      req.io.emit('order_updated', { orderId: order.id, paymentStatus: order.paymentStatus });
       res.json({ success: true, message: `Payment details updated for order ${req.params.id}` });
     } else {
       res.status(404).json({ success: false, message: 'Order not found' });
@@ -561,6 +591,7 @@ app.post('/api/chats', async (req, res) => {
       user: { fullName, phone }
     });
     await chat.save();
+    req.io.emit('new_chat', { chatId: chat._id });
     res.json(chat);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -632,6 +663,7 @@ app.post('/api/chats/:id/messages', async (req, res) => {
             });
             updatedChat.unreadUser += 1;
             await updatedChat.save();
+            req.io.emit('chat_updated', { chatId: updatedChat._id });
           }
         } catch (e) {
           console.error('Auto-reply error:', e);
@@ -639,6 +671,7 @@ app.post('/api/chats/:id/messages', async (req, res) => {
       }, 1000);
     }
     
+    req.io.emit('chat_updated', { chatId: chat._id });
     res.json(chat);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -671,6 +704,7 @@ app.post('/api/chats/:id/files', upload.single('file'), async (req, res) => {
     chat.status = 'active';
 
     await chat.save();
+    req.io.emit('chat_updated', { chatId: chat._id });
     res.json(chat);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -855,6 +889,6 @@ app.get('/api/notifications/admin', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+server.listen(port, () => {
+  console.log(`Server (Express + Socket.io) listening on port ${port}`);
 });

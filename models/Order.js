@@ -37,7 +37,8 @@ const orderSchema = new mongoose.Schema({
   cancelReason: { type: String },
   transactionId: { type: String },
   paymentScreenshot: { type: String },
-  paymentStatus: { type: String, default: 'Pending' }
+  paymentStatus: { type: String, default: 'Pending' },
+  rewardItem: { type: String, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', orderSchema);

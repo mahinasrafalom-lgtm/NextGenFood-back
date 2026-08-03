@@ -21,6 +21,7 @@
     "mongoose": "^9.8.0",
     "multer": "^2.2.0",
     "qrcode": "^1.5.4",
+    "socket.io": "^4.8.3",
     "speakeasy": "^2.0.0"
   }
 }
